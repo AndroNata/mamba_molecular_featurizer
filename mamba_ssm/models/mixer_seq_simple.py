@@ -207,7 +207,7 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
             residual_in_fp32=residual_in_fp32,
             **factory_kwargs,
         )
-        self.lm_head = nn.Linear(d_model, vocab_size, bias=False, **factory_kwargs)
+        self.lm_head = nn.Linear(2*d_model, vocab_size, bias=False, **factory_kwargs)
 
         # Initialize weights and apply final processing
         self.apply(
@@ -230,12 +230,26 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
         "position_ids" is just to be compatible with Transformer generation. We don't use it.
         num_last_tokens: if > 0, only return the logits for the last n tokens
         """
-        hidden_states = self.backbone(input_ids, inference_params=inference_params)
+        b_sz, length = input_ids.size()
+        backward_ids = torch.flip(input_ids,(1,)) # (b_sz,length)
+        input_ids = torch.cat((input_ids,backward_ids),0) # (2*b_sz,length)
+        hidden_states = self.backbone(input_ids, inference_params=inference_params) # (2*b_sz,length, dim)
         if num_last_tokens > 0:
             hidden_states = hidden_states[:, -num_last_tokens:]
-        lm_logits = self.lm_head(hidden_states)
+        forth_hidden_states, backward_hidden_states = torch.split(hidden_states, [b_sz,b_sz], dim=0)
+        combined_hidden_states = self.combine_hidden_states(forth_hidden_states, backward_hidden_states)
+        lm_logits = self.lm_head(combined_hidden_states)
         CausalLMOutput = namedtuple("CausalLMOutput", ["logits"])
         return CausalLMOutput(logits=lm_logits)
+
+    def combine_hidden_states(self, forth_hidden_states, backward_hidden_states):
+        assert forth_hidden_states.size()==backward_hidden_states.size()
+        b_sz,length,dim = forth_hidden_states.size()
+        mask = torch.ones(b_sz,length,device=forth_hidden_states.device)
+        mask[:,-2:] =0
+        backward_hidden_states = torch.roll(torch.flip(backward_hidden_states,(1,)),-2,1) * mask.unsqueeze(-1)  # (b_sz,length, dim)
+
+        return torch.cat((forth_hidden_states,backward_hidden_states), dim=2)   # (b_sz,length,2dim)
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name, device=None, dtype=None, **kwargs):

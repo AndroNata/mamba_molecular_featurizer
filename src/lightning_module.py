@@ -12,10 +12,11 @@ class SymbolPredictor(pl.LightningModule):
     def __init__(self,
                  d_model=256,
                  n_layer=10,
-                 vocab_size=421
+                 vocab_size=421,
+                 top_k=2
                  ):
         super().__init__()
-
+        self.save_hyperparameters()
         mamba_config = MambaConfig(
             d_model=d_model,
             n_layer=n_layer,
@@ -23,7 +24,7 @@ class SymbolPredictor(pl.LightningModule):
         )
         self.model = MambaLMHeadModel(
             config=mamba_config,
-            dtype=torch.bfloat16,
+            dtype=torch.float,
             device="cuda"
         )    # Predict a symbol by all it's neighbour symbols
 
@@ -45,7 +46,7 @@ class SymbolPredictor(pl.LightningModule):
         print(f"\nBatch hard mining strategy: {self.hparams.batch_hard_mining}")
 
     def compute_logits_and_labels(self, input_ids):
-        lm_logits = self.model(input_ids)  # b_sz,max_len,dict_size
+        lm_logits = self.model(input_ids).logits  # b_sz,max_len,dict_size
         b_sz, max_len, dict_size = lm_logits.size()
         shifted_logits = lm_logits[:, :-1, :].contiguous()  # b_sz,max_len-1,dict_size
         shifted_labels = input_ids[:, 1:].contiguous()  # b_sz,max_len-1
@@ -62,7 +63,7 @@ class SymbolPredictor(pl.LightningModule):
         logits, labels = self.compute_logits_and_labels(input_ids)  # (b_sz*(max_len-1),dict_size),  (b_sz*(max_len-1))
         loss = self.criterion(logits, labels)
 
-        pred_labels = torch.topk(logits, self.hparams.top_k, -1)  # (b_sz*(max_len-1),top_k)
+        pred_labels = torch.topk(logits, self.hparams.top_k, -1).indices  # (b_sz*(max_len-1),top_k)
 
         pred_labels = list(pred_labels.cpu().numpy())
         tgt_labels = list(labels.cpu().numpy()) # list of b_sz length like [array([0]), array([1])]
@@ -76,7 +77,7 @@ class SymbolPredictor(pl.LightningModule):
         self.val_exact_match_scores += ex
         self.val_partial_match_scores += pt
         self.val_precision_scores += ap
-        self.val_loss += loss
+        self.val_loss.append(loss)
 
     def on_validation_epoch_end(self) -> None:
         self.log("val/exact_match_acc", torch.tensor(self.val_exact_match_scores).float().mean(),
@@ -101,7 +102,7 @@ class SymbolPredictor(pl.LightningModule):
         self.test_exact_match_scores += ex
         self.test_partial_match_scores += pt
         self.test_precision_scores += ap
-        self.test_loss += loss
+        self.test_loss.append(loss)
 
 
     def on_test_epoch_end(self) -> None:
@@ -130,7 +131,7 @@ def calculate_metrics(pred_labels: List[Any], tgt_labels: List[Any], max_k: int)
     average_precision_scores = []
 
     for pred, tgt in zip(pred_labels, tgt_labels):
-        tgt_set = set(tgt)
+        tgt_set = [tgt]
         tgt_len = len(tgt_set)
         n_overlap = len(set(pred) & tgt_set)
 

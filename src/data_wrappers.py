@@ -63,15 +63,11 @@ class ZinkDataModule(LightningDataModule):
     def setup(self, stage: 'Optional[str]' = None) -> None:
 
         if stage == "fit" or stage is None:
-            self.__check_src_and_tgt_are_specified(Stages.TRAIN)
             self.train = ZinkDatasetWrapper(self.zink_dataset['train'], self.tokenizer)
-            self.__check_src_and_tgt_are_specified(Stages.VALIDATION)
             self.val = ZinkDatasetWrapper(self.zink_dataset['validation'], self.tokenizer)
         if stage == "validate":
-            self.__check_src_and_tgt_are_specified(Stages.VALIDATION)
             self.val = ZinkDatasetWrapper(self.zink_dataset['validation'], self.tokenizer)
         if stage == "test":
-            self.__check_src_and_tgt_are_specified(Stages.TEST)
             self.test = ZinkDatasetWrapper(self.zink_dataset['validation'], self.tokenizer)
 
     def collate_fn(self,
